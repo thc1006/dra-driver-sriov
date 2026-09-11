@@ -138,6 +138,42 @@ var _ = Describe("UpdateClaimStatusWithRetry", func() {
 		Expect(string(own.Data.Raw)).To(Equal(`{"vf":2}`), "own entry should hold this driver's desired value")
 	})
 
+	It("stops instead of writing this driver's status onto a recreated claim", func() {
+		// The claim this driver prepared for is gone and a different object now holds
+		// the name, so the status it saved does not belong to what the refetch returns.
+		recreated := newClaim(foreignDevice("dev-foreign"))
+		recreated.UID = k8stypes.UID("claim-a-uid-2")
+		fake := k8sfake.NewSimpleClientset(recreated.DeepCopy())
+
+		local := newClaim(ownDevice(`{"vf":2}`))
+
+		updateCalls := 0
+		firstUpdate := true
+		fake.PrependReactor("update", "resourceclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if !isStatusUpdate(action) {
+				return false, nil, nil
+			}
+			updateCalls++
+			if firstUpdate {
+				firstUpdate = false
+				return true, nil, apierrors.NewConflict(gr, "claim-a", errors.New("conflict"))
+			}
+			// A second attempt would succeed, so without the UID check this driver's
+			// status would land on the claim that replaced the one it prepared for.
+			return false, nil, nil
+		})
+
+		err := types.UpdateClaimStatusWithRetry(context.Background(), fake.ResourceV1().ResourceClaims(namespace), local, consts.DriverName, fastBackoff)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the claim this driver was updating is gone")
+		Expect(updateCalls).To(Equal(1), "the retry should stop rather than write to the new claim")
+
+		got, err := fake.ResourceV1().ResourceClaims(namespace).Get(context.Background(), "claim-a", metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deviceByDriver(got.Status.Devices, consts.DriverName)).To(BeNil(), "the new claim must not carry this driver's status")
+		Expect(deviceByDriver(got.Status.Devices, "other.example.com")).NotTo(BeNil(), "the new claim's own status is untouched")
+	})
+
 	It("stops on a permanent refetch error instead of retrying to the timeout", func() {
 		claim := newClaim(ownDevice(`{"vf":1}`))
 		fake := k8sfake.NewSimpleClientset(claim.DeepCopy())

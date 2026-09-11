@@ -18,6 +18,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 
 	resourceapi "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,20 +49,13 @@ type ResourceClaimStatusClient interface {
 	Get(ctx context.Context, name string, opts metav1.GetOptions) (*resourceapi.ResourceClaim, error)
 }
 
-// UpdateClaimStatusWithRetry writes claim.Status and retries on conflict. On a
-// conflict it refetches the claim and reapplies this driver's device statuses on
-// top of the latest list with MergeDeviceStatuses, so a device another driver
-// wrote during the conflict window survives rather than being overwritten by a
-// pre-conflict snapshot.
+// UpdateClaimStatusWithRetry writes claim.Status, retrying on conflict. Each retry
+// reapplies this driver's device statuses over the refetched list, so an entry
+// another driver wrote during the conflict window survives.
 //
-// It stops early when a refetch fails permanently: the reasons that make a status
-// update permanent (the claim was deleted, or access was lost) make the refetch
-// permanent too, so looping until the backoff expires would only hide the real
-// error. When the backoff is exhausted the last real API error is returned rather
-// than the generic wait timeout, so callers can log why the update failed.
-//
-// Both the prepare path in pkg/driver and the async NRI path in pkg/nri share
-// this retry, so a fix here applies to both.
+// It stops rather than burn the backoff on an error that cannot succeed unchanged,
+// or on a claim recreated under the same name, and returns the last API error
+// rather than the backoff timeout. Both pkg/driver and pkg/nri use it.
 func UpdateClaimStatusWithRetry(
 	ctx context.Context,
 	claims ResourceClaimStatusClient,
@@ -86,10 +80,6 @@ func UpdateClaimStatusWithRetry(
 			lastErr = updateErr
 			logger.V(2).Info("Conflict detected, refreshing claim", "claim", claim.UID)
 
-			// TODO(#138): the refetch trusts name and namespace. A claim deleted and
-			// recreated with the same name has a new UID, so verify freshClaim.UID
-			// matches before merging to avoid writing this driver's status onto a
-			// different claim.
 			freshClaim, fetchErr := claims.Get(ctx, claim.Name, metav1.GetOptions{})
 			if fetchErr != nil {
 				lastErr = fetchErr
@@ -98,6 +88,15 @@ func UpdateClaimStatusWithRetry(
 				}
 				logger.V(2).Info("Failed to fetch fresh claim, retrying", "claim", claim.UID, "error", fetchErr.Error())
 				return false, nil
+			}
+
+			// A claim deleted and recreated under the same name is a different object,
+			// and this driver's status belongs to the one that is gone.
+			if freshClaim.UID != claim.UID {
+				lastErr = fmt.Errorf("claim %s was replaced (UID %s is now %s): %w",
+					claim.Name, claim.UID, freshClaim.UID,
+					apierrors.NewNotFound(resourceapi.Resource("resourceclaims"), claim.Name))
+				return false, lastErr
 			}
 
 			freshClaim.Status.Devices = MergeDeviceStatuses(freshClaim.Status.Devices, desired, driverName)

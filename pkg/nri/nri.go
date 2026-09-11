@@ -202,6 +202,12 @@ func (p *Plugin) updateNetworkDeviceData(ctx context.Context, networkDataChanStr
 			logger.Error(err, "Failed to get claim object", "claimName", claimKey.name, "claimNamespace", claimKey.namespace)
 			continue
 		}
+		// The get is by name, so a claim deleted and recreated returns the new one.
+		// Its status has nothing to do with the devices prepared for the old claim.
+		if claimKey.uid != "" && claim.UID != claimKey.uid {
+			logger.V(2).Info("Skipping claim replaced under the same name", "claimName", claimKey.name, "claimNamespace", claimKey.namespace, "preparedFor", claimKey.uid, "found", claim.UID)
+			continue
+		}
 
 		statusDeviceIndex := p.buildClaimStatusDeviceIndex(claim)
 		hasClaimStatusUpdates := false
@@ -238,6 +244,9 @@ func (p *Plugin) updateNetworkDeviceData(ctx context.Context, networkDataChanStr
 type networkClaimKey struct {
 	namespace string
 	name      string
+	// uid is the claim this device was prepared for, so a claim recreated under
+	// the same name is not mistaken for it.
+	uid k8stypes.UID
 }
 
 // claimStatusDeviceKey indexes status.devices by driver, pool and device. It
@@ -262,6 +271,7 @@ func (p *Plugin) groupNetworkDataByClaim(
 		key := networkClaimKey{
 			namespace: claim.Namespace,
 			name:      claim.Name,
+			uid:       claim.UID,
 		}
 		grouped[key] = append(grouped[key], item)
 	}
