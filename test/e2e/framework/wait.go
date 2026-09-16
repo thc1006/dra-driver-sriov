@@ -102,15 +102,19 @@ func (c *Clients) WaitForResourceClaimDeviceNetworkData(ctx context.Context, nam
 				continue
 			}
 			gotIfName, _, _ := unstructured.NestedString(device, "networkData", "interfaceName")
+			if gotIfName != ifName {
+				// A claim can hold several of this driver's devices; the others
+				// say nothing about the one that was asked for.
+				continue
+			}
 			ips, _, _ := unstructured.NestedStringSlice(device, "networkData", "ips")
 			data, _, _ := unstructured.NestedMap(device, "data")
-			g.Expect(gotIfName).To(Equal(ifName), "claim %s/%s device %v has networkData %v", namespace, name, device["device"], device["networkData"])
 			g.Expect(ips).NotTo(BeEmpty(), "claim %s/%s device %v has no IPs", namespace, name, device["device"])
 			g.Expect(data).To(HaveKey("vfConfig"))
 			g.Expect(data).To(HaveKey("cniResult"))
 			matched = true
 		}
-		g.Expect(matched).To(BeTrue(), "claim %s/%s has no status.devices entry for %s", namespace, name, DriverName)
+		g.Expect(matched).To(BeTrue(), "claim %s/%s has no %s status.devices entry for %s", namespace, name, DriverName, ifName)
 	}).WithTimeout(DefaultTimeout).WithPolling(DefaultInterval).Should(Succeed())
 }
 

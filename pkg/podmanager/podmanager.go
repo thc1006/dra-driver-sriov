@@ -127,8 +127,9 @@ func (s *PodManager) GetByClaim(claim kubeletplugin.NamespacedObject) (drasriovt
 }
 
 // UpdatePreparedDeviceNetworkData persists runtime network data on an already
-// tracked prepared device and syncs the checkpoint.
-func (s *PodManager) UpdatePreparedDeviceNetworkData(preparedDevice *drasriovtypes.PreparedDevice, networkData *resourceapi.NetworkDeviceData) error {
+// tracked prepared device, under the sequence of the observation it came from,
+// and syncs the checkpoint.
+func (s *PodManager) UpdatePreparedDeviceNetworkData(preparedDevice *drasriovtypes.PreparedDevice, networkData *resourceapi.NetworkDeviceData, seq uint64) error {
 	if preparedDevice == nil {
 		return fmt.Errorf("prepared device is nil")
 	}
@@ -136,6 +137,7 @@ func (s *PodManager) UpdatePreparedDeviceNetworkData(preparedDevice *drasriovtyp
 	defer s.mu.Unlock()
 
 	preparedDevice.SetNetworkDeviceData(networkData)
+	preparedDevice.NetworkDataSeq = seq
 	return s.syncToCheckpoint()
 }
 

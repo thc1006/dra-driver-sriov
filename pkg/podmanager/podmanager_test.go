@@ -110,9 +110,13 @@ var _ = Describe("PodManager", func() {
 		})
 
 		It("should handle invalid checkpoint directory", func() {
+			// A path under a regular file cannot be created, by root either, and
+			// leaves nothing behind on the machine running the tests.
+			file := filepath.Join(GinkgoT().TempDir(), "not-a-directory")
+			Expect(os.WriteFile(file, nil, 0o600)).To(Succeed())
 			invalidConfig := &draTypes.Config{
 				Flags: &draTypes.Flags{
-					KubeletPluginsDirectoryPath: "/invalid/path/that/does/not/exist",
+					KubeletPluginsDirectoryPath: filepath.Join(file, "sub"),
 				},
 			}
 
@@ -434,7 +438,7 @@ var _ = Describe("PodManager", func() {
 				InterfaceName: "net1",
 				IPs:           []string{"10.10.0.10/24"},
 			}
-			err = pm.UpdatePreparedDeviceNetworkData(devices[0], networkData)
+			err = pm.UpdatePreparedDeviceNetworkData(devices[0], networkData, 1)
 			Expect(err).NotTo(HaveOccurred())
 
 			pm2, err := podmanager.NewPodManager(config)
