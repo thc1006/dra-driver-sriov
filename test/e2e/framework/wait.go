@@ -80,6 +80,40 @@ func (c *Clients) WaitForResourceClaimAllocated(ctx context.Context, namespace, 
 	return claim
 }
 
+// WaitForResourceClaimDeviceNetworkData waits until the driver has recorded
+// the network data of a device on the claim: status.devices has an entry for
+// the driver whose networkData names ifName and carries at least one IP, and
+// whose data carries the CNI result next to the VF config.
+func (c *Clients) WaitForResourceClaimDeviceNetworkData(ctx context.Context, namespace, name, ifName string) {
+	Eventually(func(g Gomega) {
+		claim, err := c.Dynamic.Resource(ResourceClaimGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		devices, found, err := unstructured.NestedSlice(claim.Object, "status", "devices")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue(), "claim %s/%s has no status.devices", namespace, name)
+		var matched bool
+		for _, item := range devices {
+			device, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			driver, _, _ := unstructured.NestedString(device, "driver")
+			if driver != DriverName {
+				continue
+			}
+			gotIfName, _, _ := unstructured.NestedString(device, "networkData", "interfaceName")
+			ips, _, _ := unstructured.NestedStringSlice(device, "networkData", "ips")
+			data, _, _ := unstructured.NestedMap(device, "data")
+			g.Expect(gotIfName).To(Equal(ifName), "claim %s/%s device %v has networkData %v", namespace, name, device["device"], device["networkData"])
+			g.Expect(ips).NotTo(BeEmpty(), "claim %s/%s device %v has no IPs", namespace, name, device["device"])
+			g.Expect(data).To(HaveKey("vfConfig"))
+			g.Expect(data).To(HaveKey("cniResult"))
+			matched = true
+		}
+		g.Expect(matched).To(BeTrue(), "claim %s/%s has no status.devices entry for %s", namespace, name, DriverName)
+	}).WithTimeout(DefaultTimeout).WithPolling(DefaultInterval).Should(Succeed())
+}
+
 // WaitForResourceSlicesWithDevices waits until at least one ResourceSlice publishes devices.
 func (c *Clients) WaitForResourceSlicesWithDevices(ctx context.Context) {
 	Eventually(func(g Gomega) {
